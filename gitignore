@@ -1,0 +1,39 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.env/
+.venv/
+env/
+
+# Environment variables
+.env
+*.env
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Jupyter / Colab
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Large local files
+*.pbix
+*.xlsx
+*.csv
+*.zip
+
+# Generated outputs
+outputs/
+reports/
+charts/
+tables/
