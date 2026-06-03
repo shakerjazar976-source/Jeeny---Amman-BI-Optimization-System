@@ -1,0 +1,1348 @@
+# ============================================================
+# Jeeny BI Dashboard - Professional Data-Driven Version
+# Uses Jeeny CSV + Jeeny Colors + Jordan Map + Logo
+# Opens directly in Google Colab without Cloudflare
+# ============================================================
+
+!pip -q install streamlit pandas numpy plotly pillow openpyxl
+
+import os, glob, time, socket, subprocess
+from google.colab import output
+
+# ============================================================
+# 1) Find the correct Jeeny data file
+# ============================================================
+
+EXPECTED_COLUMNS = {
+    "external_id", "Gender", "overall_risk_flag", "payment method", "avg_price",
+    "City", "Trip_ID", "Trip_Time", "Fare", "Trip_Duration_min", "Distance_km",
+    "Pickup_Zone", "Dropoff_Zone", "Peak", "IsValidTrip", "TripHour",
+    "TripMonth", "TripWeekday", "IsWeekend", "InvalidReason"
+}
+
+def clean_col_name(c):
+    return str(c).replace("\ufeff", "").strip()
+
+def score_file(path):
+    try:
+        if path.lower().endswith(".csv"):
+            sample = __import__("pandas").read_csv(path, nrows=5, low_memory=False)
+        elif path.lower().endswith((".xlsx", ".xls")):
+            sample = __import__("pandas").read_excel(path, nrows=5)
+        else:
+            return -1
+        cols = {clean_col_name(c) for c in sample.columns}
+        return len(cols.intersection(EXPECTED_COLUMNS))
+    except Exception:
+        return -1
+
+candidate_files = (
+    glob.glob("/content/*.csv") +
+    glob.glob("/content/*.xlsx") +
+    glob.glob("/content/sample_data/*.csv") +
+    glob.glob("/content/sample_data/*.xlsx")
+)
+
+candidate_files = [
+    f for f in candidate_files
+    if not any(b in os.path.basename(f).lower() for b in ["california", "mnist", "filtered_dashboard"])
+]
+
+best_file = None
+best_score = -1
+
+for f in candidate_files:
+    s = score_file(f)
+    if s > best_score:
+        best_score = s
+        best_file = f
+
+DATA_PATH = best_file
+
+if DATA_PATH is None or best_score < 5:
+    raise FileNotFoundError("Upload the correct Jeeny CSV/XLSX file first. Expected columns like City, Trip_ID, Fare, Pickup_Zone.")
+
+print("✅ Selected data file:", DATA_PATH)
+print("✅ Schema match score:", best_score, "/ 20")
+
+# ============================================================
+# 2) Find Jordan map image
+# ============================================================
+
+possible_map_paths = [
+    "/content/c721f0d4-9955-4f30-8270-45930c2b70fc.png",
+    "/content/jordan_map.png",
+    "/content/Jordan_Map.png",
+    "/content/map.png",
+]
+
+MAP_PATH = ""
+
+for p in possible_map_paths:
+    if os.path.exists(p):
+        MAP_PATH = p
+        break
+
+if not MAP_PATH:
+    imgs = glob.glob("/content/*.png") + glob.glob("/content/*.jpg") + glob.glob("/content/*.jpeg")
+    map_candidates = [x for x in imgs if "map" in x.lower() or "jordan" in x.lower() or "c721" in x.lower()]
+    MAP_PATH = map_candidates[0] if map_candidates else ""
+
+print("🗺️ Map image:", MAP_PATH if MAP_PATH else "Not found - upload inside dashboard.")
+
+# ============================================================
+# 3) Find Jeeny logo image
+# ============================================================
+
+possible_logo_paths = [
+    "/content/unnamed.png",
+    "/content/unnamed.jpg",
+    "/content/unnamed.jpeg",
+    "/content/a681bba5-d0f5-4cd5-b156-2e6ade7bc1e5.png",
+    "/content/jeeny.png",
+    "/content/Jeeny.png",
+    "/content/logo.png",
+]
+
+LOGO_PATH = ""
+
+for p in possible_logo_paths:
+    if os.path.exists(p):
+        LOGO_PATH = p
+        break
+
+if not LOGO_PATH:
+    imgs = glob.glob("/content/*.png") + glob.glob("/content/*.jpg") + glob.glob("/content/*.jpeg")
+    logo_candidates = [x for x in imgs if "unnamed" in x.lower() or "jeeny" in x.lower() or "logo" in x.lower() or "a681" in x.lower()]
+    LOGO_PATH = logo_candidates[0] if logo_candidates else ""
+
+print("🌸 Jeeny logo:", LOGO_PATH if LOGO_PATH else "Not found - dashboard will work without logo.")
+
+# ============================================================
+# 4) Create Streamlit App
+# ============================================================
+
+APP_PATH = "/content/jeeny_professional_dashboard.py"
+
+app_code = r'''
+import os
+import pandas as pd
+import numpy as np
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+from PIL import Image
+
+st.set_page_config(
+    page_title="Jeeny BI Dashboard",
+    page_icon="🚕",
+    layout="wide"
+)
+
+DATA_PATH = r"__DATA_PATH__"
+DEFAULT_MAP_PATH = r"__MAP_PATH__"
+DEFAULT_LOGO_PATH = r"__LOGO_PATH__"
+
+# ============================================================
+# Jeeny Colors
+# ============================================================
+
+JEENY_PINK = "#E6007E"
+JEENY_PINK_DARK = "#9B0058"
+JEENY_PINK_LIGHT = "#FFF0F8"
+JEENY_TEXT = "#111827"
+JEENY_GRAY = "#F8FAFC"
+JEENY_BORDER = "#F5C7DE"
+
+# ============================================================
+# Styling
+# ============================================================
+
+st.markdown(f"""
+<style>
+[data-testid="stAppViewContainer"] {{
+    background: linear-gradient(135deg, #FFF5FB 0%, #FFFFFF 50%, #F8FAFC 100%);
+}}
+
+[data-testid="stSidebar"] {{
+    background: linear-gradient(180deg, {JEENY_PINK} 0%, {JEENY_PINK_DARK} 100%);
+}}
+
+[data-testid="stSidebar"] * {{
+    color: white !important;
+}}
+
+.block-container {{
+    padding-top: 1.3rem;
+}}
+
+.hero {{
+    background: linear-gradient(120deg, {JEENY_PINK}, {JEENY_PINK_DARK});
+    color: white;
+    padding: 28px;
+    border-radius: 30px;
+    margin-bottom: 24px;
+    box-shadow: 0 15px 40px rgba(230,0,126,0.25);
+}}
+
+.hero h1 {{
+    font-size: 42px;
+    font-weight: 900;
+    margin: 0;
+    color: white;
+}}
+
+.hero p {{
+    margin-top: 10px;
+    font-size: 17px;
+    color: white;
+}}
+
+.hero-badge {{
+    background: white;
+    color: {JEENY_PINK};
+    padding: 8px 18px;
+    border-radius: 999px;
+    font-weight: 900;
+    display: inline-block;
+    margin-top: 12px;
+}}
+
+.main-card {{
+    background: white;
+    padding: 24px;
+    border-radius: 24px;
+    border: 1px solid {JEENY_BORDER};
+    box-shadow: 0 8px 28px rgba(230,0,126,0.08);
+    margin-bottom: 18px;
+}}
+
+.solution-box {{
+    background: white;
+    border-left: 8px solid {JEENY_PINK};
+    padding: 20px;
+    border-radius: 18px;
+    margin-bottom: 15px;
+    box-shadow: 0 6px 18px rgba(230,0,126,0.08);
+}}
+
+.success-box {{
+    background: #FFF0F8;
+    border-left: 8px solid {JEENY_PINK};
+    padding: 18px;
+    border-radius: 18px;
+    margin-bottom: 14px;
+}}
+
+.warning-box {{
+    background: #FFF8FC;
+    border-left: 8px solid #FF4DA6;
+    padding: 18px;
+    border-radius: 18px;
+    margin-bottom: 14px;
+}}
+
+.section-title {{
+    font-size: 32px;
+    font-weight: 900;
+    color: {JEENY_TEXT};
+    margin-bottom: 5px;
+}}
+
+.section-subtitle {{
+    color: #4b5563;
+    font-size: 16px;
+    margin-bottom: 20px;
+}}
+
+div[data-testid="stMetric"] {{
+    background: white;
+    border: 1px solid {JEENY_BORDER};
+    padding: 18px;
+    border-radius: 20px;
+    box-shadow: 0 8px 20px rgba(230,0,126,0.07);
+}}
+
+div[data-testid="stMetricValue"] {{
+    color: {JEENY_PINK};
+    font-weight: 900;
+}}
+
+.stTabs [data-baseweb="tab"] {{
+    background-color: white;
+    border-radius: 14px 14px 0 0;
+    padding: 10px 18px;
+    border: 1px solid {JEENY_BORDER};
+}}
+
+.stTabs [aria-selected="true"] {{
+    background-color: {JEENY_PINK} !important;
+    color: white !important;
+}}
+
+[data-testid="stDataFrame"] {{
+    border-radius: 18px;
+}}
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# Data Loading and Cleaning
+# ============================================================
+
+def clean_col_name(c):
+    return str(c).replace("\ufeff", "").strip()
+
+def clean_text_series(s):
+    s = s.astype("string")
+    s = s.str.strip()
+    s = s.replace({
+        "": pd.NA,
+        "nan": pd.NA,
+        "NaN": pd.NA,
+        "None": pd.NA,
+        "null": pd.NA,
+        "NULL": pd.NA
+    })
+    return s
+
+@st.cache_data
+def load_data():
+    if DATA_PATH.lower().endswith(".csv"):
+        df = pd.read_csv(DATA_PATH, low_memory=False)
+    else:
+        df = pd.read_excel(DATA_PATH)
+
+    df.columns = [clean_col_name(c) for c in df.columns]
+
+    rename_map = {
+        "overall_risk_flag": "Risk_Flag",
+        "payment method": "Payment_Method",
+        "avg_price": "Avg_Price"
+    }
+
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+
+    required = [
+        "City", "Pickup_Zone", "Dropoff_Zone", "Fare", "Trip_Duration_min",
+        "Distance_km", "Trip_Time", "TripHour", "TripWeekday", "IsWeekend",
+        "Risk_Flag", "Payment_Method", "Gender", "Trip_ID", "IsValidTrip"
+    ]
+
+    for col in required:
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    # Text cleaning
+    for col in ["City", "Pickup_Zone", "Dropoff_Zone", "Risk_Flag", "Payment_Method", "Gender"]:
+        df[col] = clean_text_series(df[col])
+
+    # Numeric cleaning
+    for col in ["Fare", "Trip_Duration_min", "Distance_km", "TripHour", "TripWeekday", "IsWeekend", "IsValidTrip"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Date cleaning
+    df["Trip_Time"] = pd.to_datetime(df["Trip_Time"], errors="coerce")
+
+    # Fill temporal fields from Trip_Time if needed
+    df.loc[df["TripHour"].isna() & df["Trip_Time"].notna(), "TripHour"] = df.loc[df["TripHour"].isna() & df["Trip_Time"].notna(), "Trip_Time"].dt.hour
+    df.loc[df["TripWeekday"].isna() & df["Trip_Time"].notna(), "TripWeekday"] = df.loc[df["TripWeekday"].isna() & df["Trip_Time"].notna(), "Trip_Time"].dt.dayofweek
+    df.loc[df["IsWeekend"].isna() & df["TripWeekday"].notna(), "IsWeekend"] = df.loc[df["IsWeekend"].isna() & df["TripWeekday"].notna(), "TripWeekday"].isin([4, 5]).astype(int)
+
+    # Remove invalid rows only if IsValidTrip exists with values
+    if df["IsValidTrip"].notna().any():
+        df = df[df["IsValidTrip"].fillna(1).astype(int) == 1].copy()
+
+    # Remove fully unusable rows
+    df = df.dropna(subset=["City", "Pickup_Zone", "Dropoff_Zone", "Fare", "TripHour"], how="any").copy()
+
+    # Airport to Amman business rule
+    df.loc[df["Pickup_Zone"].astype(str).str.contains("Airport", case=False, na=False), "City"] = "Amman"
+
+    if df["Trip_ID"].isna().all():
+        df["Trip_ID"] = np.arange(1, len(df) + 1)
+
+    df["IsHighRisk"] = df["Risk_Flag"].astype(str).str.lower().str.contains("high", na=False).astype(int)
+    df["IsAirport"] = df["Pickup_Zone"].astype(str).str.contains("Airport", case=False, na=False).astype(int)
+    df["Revenue_per_Minute"] = df["Fare"] / df["Trip_Duration_min"].replace(0, np.nan)
+    df["Fare_per_Km"] = df["Fare"] / df["Distance_km"].replace(0, np.nan)
+    df["Duration_per_Km"] = df["Trip_Duration_min"] / df["Distance_km"].replace(0, np.nan)
+
+    # Final cleanup for filters
+    for col in ["City", "Pickup_Zone", "Dropoff_Zone", "Risk_Flag", "Payment_Method", "Gender"]:
+        df = df[df[col].notna()]
+        df = df[~df[col].astype(str).str.lower().isin(["nan", "none", "null", ""])]
+
+    return df.reset_index(drop=True)
+
+df = load_data()
+
+# ============================================================
+# Project fallback summary from RM report
+# Used only if uploaded raw data is empty/wrong
+# ============================================================
+
+PROJECT_CITY_FALLBACK = pd.DataFrame([
+    ["Amman", 46384, 142351.44, 3.07, 56.15, 16.97, 63.8],
+    ["Irbid", 10703, 19428.48, 1.82, 28.65, 9.45, 51.3],
+    ["Zarqa", 8340, 18734.73, 2.25, 34.33, 11.74, 53.1],
+    ["Aqaba", 6142, 31432.94, 5.12, 31.31, 14.58, 44.1],
+    ["Karak", 3535, 5681.01, 1.61, 27.25, 8.77, 51.3],
+    ["Madaba", 2109, 4307.96, 2.04, 28.38, 9.87, 49.0],
+    ["Jerash", 1624, 3177.48, 1.96, 27.05, 9.22, 50.1],
+    ["Mafraq", 789, 991.92, 1.26, 25.14, 10.59, 64.8],
+], columns=["City", "Trips", "Revenue", "Avg_Fare", "Avg_Duration", "Avg_Distance", "High_Risk_Share"])
+
+# ============================================================
+# Helper Functions
+# ============================================================
+
+def normalize(series):
+    s = pd.to_numeric(series, errors="coerce").astype(float)
+    mn, mx = s.min(), s.max()
+    if pd.isna(mn) or pd.isna(mx) or mx == mn:
+        return pd.Series(0, index=s.index)
+    return (s - mn) / (mx - mn)
+
+def build_city_summary(data):
+    if len(data) == 0:
+        city = PROJECT_CITY_FALLBACK.copy()
+    else:
+        city = data.groupby("City", as_index=False).agg(
+            Trips=("Trip_ID", "count"),
+            Revenue=("Fare", "sum"),
+            Avg_Fare=("Fare", "mean"),
+            Avg_Duration=("Trip_Duration_min", "mean"),
+            Avg_Distance=("Distance_km", "mean"),
+            High_Risk_Share=("IsHighRisk", "mean"),
+            Airport_Trips=("IsAirport", "sum")
+        )
+        city["High_Risk_Share"] *= 100
+
+    city["Trips_Score"] = normalize(city["Trips"])
+    city["Revenue_Score"] = normalize(city["Revenue"])
+    city["Duration_Score"] = normalize(city["Avg_Duration"])
+    city["Risk_Score"] = normalize(city["High_Risk_Share"])
+
+    city["Operational_Pressure_Index"] = (
+        0.40 * city["Trips_Score"] +
+        0.25 * city["Revenue_Score"] +
+        0.20 * city["Duration_Score"] +
+        0.15 * city["Risk_Score"]
+    ) * 100
+
+    return city.sort_values("Operational_Pressure_Index", ascending=False)
+
+def build_zone_summary(data):
+    if len(data) == 0:
+        return pd.DataFrame()
+
+    zone = data.groupby("Pickup_Zone", as_index=False).agg(
+        Trips=("Trip_ID", "count"),
+        Revenue=("Fare", "sum"),
+        Avg_Fare=("Fare", "mean"),
+        Avg_Duration=("Trip_Duration_min", "mean"),
+        Avg_Distance=("Distance_km", "mean"),
+        High_Risk_Share=("IsHighRisk", "mean"),
+        Revenue_per_Minute=("Revenue_per_Minute", "mean"),
+        Fare_per_Km=("Fare_per_Km", "mean")
+    )
+
+    zone["High_Risk_Share"] *= 100
+
+    zone["Demand_Score"] = normalize(zone["Trips"])
+    zone["Revenue_Score"] = normalize(zone["Revenue"])
+    zone["Duration_Score"] = normalize(zone["Avg_Duration"])
+    zone["Risk_Score"] = normalize(zone["High_Risk_Share"])
+
+    zone["Bottleneck_Index"] = (
+        0.45 * zone["Demand_Score"] +
+        0.20 * zone["Revenue_Score"] +
+        0.20 * zone["Duration_Score"] +
+        0.15 * zone["Risk_Score"]
+    ) * 100
+
+    return zone.sort_values("Bottleneck_Index", ascending=False)
+
+def build_od_summary(data):
+    if len(data) == 0:
+        return pd.DataFrame()
+
+    od = data.groupby(["Pickup_Zone", "Dropoff_Zone"], as_index=False).agg(
+        Trips=("Trip_ID", "count"),
+        Revenue=("Fare", "sum"),
+        Avg_Fare=("Fare", "mean"),
+        Avg_Duration=("Trip_Duration_min", "mean"),
+        Avg_Distance=("Distance_km", "mean"),
+        Revenue_per_Minute=("Revenue_per_Minute", "mean"),
+        Fare_per_Km=("Fare_per_Km", "mean"),
+        Duration_per_Km=("Duration_per_Km", "mean"),
+        High_Risk_Share=("IsHighRisk", "mean")
+    )
+
+    od["High_Risk_Share"] *= 100
+    od["Route"] = od["Pickup_Zone"] + " → " + od["Dropoff_Zone"]
+
+    od["Demand_Score"] = normalize(od["Trips"])
+    od["Revenue_Score"] = normalize(od["Revenue"])
+    od["Duration_Score"] = normalize(od["Avg_Duration"])
+    od["Risk_Score"] = normalize(od["High_Risk_Share"])
+
+    od["Route_Pressure_Index"] = (
+        0.40 * od["Demand_Score"] +
+        0.25 * od["Revenue_Score"] +
+        0.20 * od["Duration_Score"] +
+        0.15 * od["Risk_Score"]
+    ) * 100
+
+    return od.sort_values("Route_Pressure_Index", ascending=False)
+
+def safe_unique(data, col):
+    if col not in data.columns:
+        return []
+    vals = data[col].dropna().astype(str).str.strip()
+    vals = vals[~vals.str.lower().isin(["nan", "none", "null", ""])]
+    return sorted(vals.unique().tolist())
+
+def classify_risk(row, distance_limit):
+    hour = int(row["TripHour"]) if pd.notna(row["TripHour"]) else -1
+
+    if row["IsHighRisk"] == 1 and row["IsAirport"] == 1 and hour in [16, 17, 18, 20, 21, 22, 23]:
+        return "Group D - Critical Watch"
+    elif row["IsHighRisk"] == 1 or row["IsAirport"] == 1:
+        return "Group C - High Risk"
+    elif hour in [16, 17, 18, 20, 21] or row["Distance_km"] >= distance_limit:
+        return "Group B - Medium Risk"
+    else:
+        return "Group A - Low Risk"
+
+# ============================================================
+# Sidebar
+# ============================================================
+
+st.sidebar.title("Jeeny BI Control")
+
+if DEFAULT_LOGO_PATH and os.path.exists(DEFAULT_LOGO_PATH):
+    st.sidebar.image(DEFAULT_LOGO_PATH, use_container_width=True)
+
+page = st.sidebar.radio(
+    "Dashboard Section",
+    ["🗺️ Jordan Map", "📊 KPIs Dashboard", "🚀 Improvement / Solutions"]
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Filters")
+
+cities = safe_unique(df, "City")
+pickup_zones = safe_unique(df, "Pickup_Zone")
+dropoff_zones = safe_unique(df, "Dropoff_Zone")
+risk_values = safe_unique(df, "Risk_Flag")
+payment_values = safe_unique(df, "Payment_Method")
+
+selected_cities = st.sidebar.multiselect("City / Governorate", cities, default=cities)
+
+selected_pickup = st.sidebar.selectbox("Pickup Zone", ["All"] + pickup_zones)
+selected_dropoff = st.sidebar.selectbox("Dropoff Zone", ["All"] + dropoff_zones)
+selected_risk = st.sidebar.selectbox("Risk Flag", ["All"] + risk_values)
+selected_payment = st.sidebar.selectbox("Payment Method", ["All"] + payment_values)
+
+available_hours = sorted(df["TripHour"].dropna().astype(int).unique().tolist()) if len(df) else list(range(24))
+min_hour = int(min(available_hours)) if available_hours else 0
+max_hour = int(max(available_hours)) if available_hours else 23
+
+hour_range = st.sidebar.slider("Trip Hour Range", 0, 23, (min_hour, max_hour))
+
+# ============================================================
+# Filtering
+# ============================================================
+
+f = df.copy()
+
+if selected_cities:
+    f = f[f["City"].isin(selected_cities)]
+
+if selected_pickup != "All":
+    f = f[f["Pickup_Zone"] == selected_pickup]
+
+if selected_dropoff != "All":
+    f = f[f["Dropoff_Zone"] == selected_dropoff]
+
+if selected_risk != "All":
+    f = f[f["Risk_Flag"] == selected_risk]
+
+if selected_payment != "All":
+    f = f[f["Payment_Method"] == selected_payment]
+
+f = f[(f["TripHour"] >= hour_range[0]) & (f["TripHour"] <= hour_range[1])]
+
+# ============================================================
+# Shared KPIs
+# ============================================================
+
+total_trips = len(f)
+total_revenue = f["Fare"].sum() if len(f) else 0
+avg_fare = f["Fare"].mean() if len(f) else np.nan
+avg_duration = f["Trip_Duration_min"].mean() if len(f) else np.nan
+avg_distance = f["Distance_km"].mean() if len(f) else np.nan
+high_risk_share = f["IsHighRisk"].mean() * 100 if len(f) else 0
+airport_share = f["IsAirport"].mean() * 100 if len(f) else 0
+amman_share = f["City"].eq("Amman").mean() * 100 if len(f) else 0
+rev_per_min = f["Revenue_per_Minute"].mean() if len(f) else np.nan
+fare_per_km = f["Fare_per_Km"].mean() if len(f) else np.nan
+
+# ============================================================
+# Header
+# ============================================================
+
+st.markdown("""
+<div class="hero">
+    <h1>Jeeny Jordan BI Optimization Dashboard</h1>
+    <p>Professional data-driven dashboard based on the Jeeny dataset: Jordan map, KPIs, airport bottleneck, OD routes, risk, and improvement actions.</p>
+    <span class="hero-badge">Jeeny Business Intelligence System</span>
+</div>
+""", unsafe_allow_html=True)
+
+if len(df) == 0:
+    st.error("The uploaded data file was loaded, but no valid rows were found after cleaning. Check the file columns.")
+else:
+    st.caption(f"Loaded rows after cleaning: {len(df):,} | Current filtered rows: {len(f):,}")
+
+# ============================================================
+# PAGE 1 - Jordan Map
+# ============================================================
+
+if page == "🗺️ Jordan Map":
+
+    st.markdown('<div class="section-title">🗺️ Jordan Map - Jeeny Data</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-subtitle">Only cities available in the Jeeny dataset are displayed on the map.</div>', unsafe_allow_html=True)
+
+    city_summary = build_city_summary(f)
+
+    c1, c2 = st.columns([1.35, 1])
+
+    with c1:
+        st.markdown('<div class="main-card">', unsafe_allow_html=True)
+        st.subheader("Interactive Jordan Map")
+
+        map_source = None
+
+        if DEFAULT_MAP_PATH and os.path.exists(DEFAULT_MAP_PATH):
+            map_source = Image.open(DEFAULT_MAP_PATH)
+        else:
+            uploaded_map = st.file_uploader("Upload Jordan map image", type=["png", "jpg", "jpeg"])
+            if uploaded_map is not None:
+                map_source = Image.open(uploaded_map)
+
+        if map_source is not None and len(city_summary) > 0:
+
+            city_points = pd.DataFrame([
+                ["Irbid", 0.25, 0.80],
+                ["Jerash", 0.29, 0.71],
+                ["Amman", 0.35, 0.56],
+                ["Zarqa", 0.49, 0.60],
+                ["Mafraq", 0.65, 0.72],
+                ["Madaba", 0.25, 0.52],
+                ["Karak", 0.28, 0.42],
+                ["Aqaba", 0.16, 0.08],
+            ], columns=["City", "x", "y"])
+
+            map_df = city_points.merge(city_summary, on="City", how="inner")
+
+            fig = go.Figure()
+
+            fig.add_layout_image(
+                dict(
+                    source=map_source,
+                    xref="x",
+                    yref="y",
+                    x=0,
+                    y=1,
+                    sizex=1,
+                    sizey=1,
+                    sizing="stretch",
+                    opacity=1,
+                    layer="below"
+                )
+            )
+
+            max_trips = max(map_df["Trips"].max(), 1)
+            marker_sizes = np.maximum(18, map_df["Trips"] / max_trips * 72)
+
+            fig.add_trace(go.Scatter(
+                x=map_df["x"],
+                y=map_df["y"],
+                mode="markers+text",
+                text=map_df["City"],
+                textposition="top center",
+                marker=dict(
+                    size=marker_sizes,
+                    color=map_df["Trips"],
+                    colorscale=[
+                        [0, "#FFD6EA"],
+                        [0.35, "#FF7BBE"],
+                        [0.7, "#E6007E"],
+                        [1, "#8A004B"]
+                    ],
+                    showscale=True,
+                    colorbar=dict(title="Trips"),
+                    line=dict(width=2, color="white")
+                ),
+                customdata=np.stack([
+                    map_df["Trips"],
+                    map_df["Revenue"],
+                    map_df["Avg_Fare"],
+                    map_df["Avg_Duration"],
+                    map_df["Avg_Distance"],
+                    map_df["High_Risk_Share"],
+                    map_df["Operational_Pressure_Index"]
+                ], axis=-1),
+                hovertemplate=
+                    "<b>%{text}</b><br>" +
+                    "Trips: %{customdata[0]:,.0f}<br>" +
+                    "Revenue: %{customdata[1]:,.2f} JOD<br>" +
+                    "Avg Fare: %{customdata[2]:.2f} JOD<br>" +
+                    "Avg Duration: %{customdata[3]:.2f} min<br>" +
+                    "Avg Distance: %{customdata[4]:.2f} km<br>" +
+                    "High Risk Share: %{customdata[5]:.2f}%<br>" +
+                    "Pressure Index: %{customdata[6]:.2f}<extra></extra>"
+            ))
+
+            fig.update_xaxes(visible=False, range=[0, 1])
+            fig.update_yaxes(visible=False, range=[0, 1])
+            fig.update_layout(
+                height=720,
+                margin=dict(l=0, r=0, t=20, b=0),
+                plot_bgcolor="white",
+                paper_bgcolor="white"
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+        else:
+            st.warning("Jordan map image was not found. Upload the map image to display it.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with c2:
+        st.markdown('<div class="main-card">', unsafe_allow_html=True)
+        st.subheader("City Summary")
+
+        show_cols = [
+            "City", "Trips", "Revenue", "Avg_Fare", "Avg_Duration",
+            "Avg_Distance", "High_Risk_Share", "Operational_Pressure_Index"
+        ]
+        st.dataframe(city_summary[show_cols].round(2), use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        if len(city_summary):
+            top_city = city_summary.iloc[0]["City"]
+            top_trips = city_summary.iloc[0]["Trips"]
+            top_revenue = city_summary.iloc[0]["Revenue"]
+
+            st.markdown(f"""
+            <div class="success-box">
+            <b>Data-driven result:</b><br>
+            Highest city under current filters: <b>{top_city}</b><br>
+            Trips: <b>{top_trips:,.0f}</b><br>
+            Revenue: <b>{top_revenue:,.2f} JOD</b>
+            </div>
+            """, unsafe_allow_html=True)
+
+# ============================================================
+# PAGE 2 - KPIs
+# ============================================================
+
+elif page == "📊 KPIs Dashboard":
+
+    st.markdown('<div class="section-title">📊 Jeeny KPI Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-subtitle">All KPIs are calculated directly from the cleaned Jeeny dataset.</div>', unsafe_allow_html=True)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Valid Trips", f"{total_trips:,.0f}")
+    k2.metric("Total Revenue", f"{total_revenue:,.2f} JOD")
+    k3.metric("Average Fare", f"{avg_fare:.2f} JOD" if pd.notna(avg_fare) else "0")
+    k4.metric("High Risk Share", f"{high_risk_share:.1f}%")
+
+    k5, k6, k7, k8 = st.columns(4)
+    k5.metric("Avg Duration", f"{avg_duration:.1f} min" if pd.notna(avg_duration) else "0")
+    k6.metric("Avg Distance", f"{avg_distance:.1f} km" if pd.notna(avg_distance) else "0")
+    k7.metric("Amman Share", f"{amman_share:.1f}%")
+    k8.metric("Airport Share", f"{airport_share:.1f}%")
+
+    k9, k10 = st.columns(2)
+    k9.metric("Revenue per Minute", f"{rev_per_min:.3f} JOD/min" if pd.notna(rev_per_min) else "0")
+    k10.metric("Fare per KM", f"{fare_per_km:.3f} JOD/km" if pd.notna(fare_per_km) else "0")
+
+    st.markdown("---")
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Demand & Revenue",
+        "City / Zone Pressure",
+        "Airport Focus",
+        "OD Profitability"
+    ])
+
+    with tab1:
+        c1, c2 = st.columns(2)
+
+        with c1:
+            st.markdown('<div class="main-card">', unsafe_allow_html=True)
+            st.subheader("Hourly Demand")
+            hourly = f.groupby("TripHour", as_index=False).agg(Trips=("Trip_ID", "count"))
+            fig = px.bar(
+                hourly,
+                x="TripHour",
+                y="Trips",
+                text="Trips",
+                color="Trips",
+                color_continuous_scale=["#FFD6EA", "#E6007E", "#8A004B"]
+            )
+            fig.update_layout(height=420)
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with c2:
+            st.markdown('<div class="main-card">', unsafe_allow_html=True)
+            st.subheader("Hourly Revenue")
+            hourly_rev = f.groupby("TripHour", as_index=False).agg(Revenue=("Fare", "sum"))
+            fig = px.line(hourly_rev, x="TripHour", y="Revenue", markers=True)
+            fig.update_traces(line=dict(color=JEENY_PINK, width=4), marker=dict(size=9, color=JEENY_PINK))
+            fig.update_layout(height=420)
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        c3, c4 = st.columns(2)
+
+        with c3:
+            st.markdown('<div class="main-card">', unsafe_allow_html=True)
+            st.subheader("Payment Method Distribution")
+            pay = f["Payment_Method"].value_counts().reset_index()
+            pay.columns = ["Payment_Method", "Trips"]
+            fig = px.pie(
+                pay,
+                values="Trips",
+                names="Payment_Method",
+                hole=0.45,
+                color_discrete_sequence=["#E6007E", "#FF7BBE", "#8A004B", "#111827", "#FFD6EA"]
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with c4:
+            st.markdown('<div class="main-card">', unsafe_allow_html=True)
+            st.subheader("Risk Distribution")
+            risk = f["Risk_Flag"].value_counts().reset_index()
+            risk.columns = ["Risk_Flag", "Trips"]
+            fig = px.bar(
+                risk,
+                x="Risk_Flag",
+                y="Trips",
+                text="Trips",
+                color="Trips",
+                color_continuous_scale=["#FFD6EA", "#E6007E", "#8A004B"]
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab2:
+        city_summary = build_city_summary(f)
+        zone_summary = build_zone_summary(f)
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            st.markdown('<div class="main-card">', unsafe_allow_html=True)
+            st.subheader("City Operational Pressure")
+            fig = px.bar(
+                city_summary,
+                x="City",
+                y="Operational_Pressure_Index",
+                text="Operational_Pressure_Index",
+                color="Operational_Pressure_Index",
+                color_continuous_scale=["#FFD6EA", "#E6007E", "#8A004B"],
+                hover_data=["Trips", "Revenue", "High_Risk_Share"]
+            )
+            fig.update_traces(texttemplate="%{text:.1f}")
+            fig.update_layout(height=440)
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with c2:
+            st.markdown('<div class="main-card">', unsafe_allow_html=True)
+            st.subheader("Top Pickup Zones by Bottleneck Index")
+            if len(zone_summary):
+                top_zone = zone_summary.head(12)
+                fig = px.bar(
+                    top_zone,
+                    x="Pickup_Zone",
+                    y="Bottleneck_Index",
+                    text="Bottleneck_Index",
+                    color="Bottleneck_Index",
+                    color_continuous_scale=["#FFD6EA", "#E6007E", "#8A004B"],
+                    hover_data=["Trips", "Revenue", "High_Risk_Share"]
+                )
+                fig.update_traces(texttemplate="%{text:.1f}")
+                fig.update_layout(height=440)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("No zone data under current filters.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="main-card">', unsafe_allow_html=True)
+        st.subheader("Pickup Zone Performance Table")
+        st.dataframe(zone_summary.round(2), use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab3:
+        airport = f[f["IsAirport"] == 1].copy()
+
+        st.markdown('<div class="main-card">', unsafe_allow_html=True)
+        st.subheader("Airport Focus KPIs")
+
+        if len(airport):
+            a1, a2, a3, a4 = st.columns(4)
+            a1.metric("Airport Trips", f"{len(airport):,}")
+            a2.metric("Airport Revenue", f"{airport['Fare'].sum():,.2f} JOD")
+            a3.metric("Airport High Risk", f"{airport['IsHighRisk'].mean()*100:.1f}%")
+            a4.metric("Airport Avg Duration", f"{airport['Trip_Duration_min'].mean():.1f} min")
+
+            airport_hour = airport.groupby("TripHour", as_index=False).agg(
+                Trips=("Trip_ID", "count"),
+                Revenue=("Fare", "sum"),
+                High_Risk_Share=("IsHighRisk", "mean")
+            )
+            airport_hour["High_Risk_Share"] *= 100
+
+            fig = px.bar(
+                airport_hour,
+                x="TripHour",
+                y="Trips",
+                text="Trips",
+                color="Trips",
+                color_continuous_scale=["#FFD6EA", "#E6007E", "#8A004B"],
+                hover_data=["Revenue", "High_Risk_Share"],
+                title="Airport Trips by Hour"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(airport_hour.round(2), use_container_width=True)
+
+        else:
+            st.warning("No airport trips under current filters.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab4:
+        od = build_od_summary(f)
+
+        st.markdown('<div class="main-card">', unsafe_allow_html=True)
+        st.subheader("Top OD Routes by Pressure")
+        if len(od):
+            st.dataframe(od.head(25).round(2), use_container_width=True)
+        else:
+            st.warning("No OD data under current filters.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="main-card">', unsafe_allow_html=True)
+        st.subheader("Low Efficiency Routes")
+        if len(od):
+            low_eff = od[od["Trips"] >= 10].sort_values("Revenue_per_Minute", ascending=True).head(20)
+            st.dataframe(low_eff.round(2), use_container_width=True)
+        else:
+            st.warning("No route data under current filters.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# ============================================================
+# PAGE 3 - Solutions
+# ============================================================
+
+elif page == "🚀 Improvement / Solutions":
+
+    st.markdown('<div class="section-title">🚀 Jeeny Improvement / Solutions</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-subtitle">Recommendations are calculated from the Jeeny dataset. Driver count appears only if you enter actual available drivers.</div>', unsafe_allow_html=True)
+
+    sol_tab1, sol_tab2, sol_tab3, sol_tab4, sol_tab5 = st.tabs([
+        "Step 1 - Driver Allocation",
+        "Step 2 - Risk Groups",
+        "Step 3 - Fare & Revenue",
+        "Step 4 - Governorate Monitoring",
+        "Step 5 - Peak-Hour Pilot"
+    ])
+
+    with sol_tab1:
+        st.markdown('<div class="solution-box">', unsafe_allow_html=True)
+        st.subheader("Step 1: Data-Driven Driver Allocation")
+        st.write("The model uses trip demand, revenue share, risk share, and average duration. It does not invent driver counts.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        available_hours_filtered = sorted(f["TripHour"].dropna().astype(int).unique().tolist())
+
+        if available_hours_filtered:
+            default_index = available_hours_filtered.index(21) if 21 in available_hours_filtered else len(available_hours_filtered) - 1
+
+            selected_hour = st.selectbox(
+                "Select operating hour from Jeeny data",
+                available_hours_filtered,
+                index=default_index
+            )
+
+            h = f[f["TripHour"] == selected_hour].copy()
+
+            allocation = h.groupby("Pickup_Zone", as_index=False).agg(
+                Trips=("Trip_ID", "count"),
+                Revenue=("Fare", "sum"),
+                Avg_Duration=("Trip_Duration_min", "mean"),
+                Avg_Distance=("Distance_km", "mean"),
+                High_Risk_Share=("IsHighRisk", "mean"),
+                Revenue_per_Minute=("Revenue_per_Minute", "mean"),
+                Fare_per_Km=("Fare_per_Km", "mean")
+            )
+
+            if len(allocation):
+                allocation["High_Risk_Share"] *= 100
+
+                allocation["Demand_Score"] = allocation["Trips"] / allocation["Trips"].sum()
+                allocation["Revenue_Score"] = allocation["Revenue"] / allocation["Revenue"].sum()
+                allocation["Risk_Score"] = allocation["High_Risk_Share"] / max(allocation["High_Risk_Share"].max(), 1)
+                allocation["Duration_Score"] = normalize(allocation["Avg_Duration"])
+
+                allocation["Allocation_Score"] = (
+                    0.55 * allocation["Demand_Score"] +
+                    0.20 * allocation["Revenue_Score"] +
+                    0.15 * allocation["Risk_Score"] +
+                    0.10 * allocation["Duration_Score"]
+                )
+
+                allocation["Recommended_Driver_Share_%"] = (
+                    allocation["Allocation_Score"] / allocation["Allocation_Score"].sum() * 100
+                )
+
+                use_driver_count = st.checkbox("Convert share to actual driver count")
+
+                if use_driver_count:
+                    total_drivers = st.number_input(
+                        "Enter actual available drivers",
+                        min_value=1,
+                        max_value=10000,
+                        value=100,
+                        step=1
+                    )
+                    allocation["Recommended_Drivers"] = (
+                        allocation["Recommended_Driver_Share_%"] / 100 * total_drivers
+                    ).round().astype(int)
+                else:
+                    allocation["Recommended_Drivers"] = "Enter actual driver count"
+
+                allocation = allocation.sort_values("Recommended_Driver_Share_%", ascending=False)
+
+                st.markdown('<div class="main-card">', unsafe_allow_html=True)
+                st.subheader(f"Driver Allocation - Hour {selected_hour}:00")
+                st.dataframe(allocation.round(2), use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                fig = px.bar(
+                    allocation,
+                    x="Pickup_Zone",
+                    y="Recommended_Driver_Share_%",
+                    text="Recommended_Driver_Share_%",
+                    color="Recommended_Driver_Share_%",
+                    color_continuous_scale=["#FFD6EA", "#E6007E", "#8A004B"],
+                    hover_data=["Trips", "Revenue", "Avg_Duration", "Avg_Distance", "High_Risk_Share"]
+                )
+                fig.update_traces(texttemplate="%{text:.1f}%")
+                st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                st.warning("No trips found for this hour.")
+
+        else:
+            st.warning("No hours available under current filters.")
+
+    with sol_tab2:
+        st.markdown('<div class="solution-box">', unsafe_allow_html=True)
+        st.subheader("Step 2: Risk-Based Trip Segmentation")
+        st.write("Risk groups are based on Jeeny risk flag, airport pickup, trip hour, and trip distance.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        risk_df = f.copy()
+
+        if len(risk_df):
+            distance_limit = risk_df["Distance_km"].quantile(0.75)
+            risk_df["Risk_Group"] = risk_df.apply(lambda row: classify_risk(row, distance_limit), axis=1)
+
+            group_summary = risk_df.groupby("Risk_Group", as_index=False).agg(
+                Trips=("Trip_ID", "count"),
+                Revenue=("Fare", "sum"),
+                Avg_Duration=("Trip_Duration_min", "mean"),
+                Avg_Distance=("Distance_km", "mean"),
+                High_Risk_Share=("IsHighRisk", "mean"),
+                Airport_Share=("IsAirport", "mean")
+            )
+
+            group_summary["High_Risk_Share"] *= 100
+            group_summary["Airport_Share"] *= 100
+
+            c1, c2 = st.columns([1.15, 1])
+
+            with c1:
+                st.markdown('<div class="main-card">', unsafe_allow_html=True)
+                st.subheader("Risk Group Summary")
+                st.dataframe(group_summary.round(2), use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            with c2:
+                st.markdown('<div class="main-card">', unsafe_allow_html=True)
+                st.subheader("Risk Group Distribution")
+                fig = px.pie(
+                    group_summary,
+                    names="Risk_Group",
+                    values="Trips",
+                    hole=0.45,
+                    color_discrete_sequence=["#E6007E", "#FF7BBE", "#8A004B", "#111827", "#FFD6EA"]
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            st.markdown("""
+            <div class="warning-box">
+            <b>Operational Treatment:</b><br>
+            Group A: Standard dispatch.<br>
+            Group B: Monitor by hour and zone.<br>
+            Group C: Add driver support and experienced driver preference.<br>
+            Group D: Supervisor monitoring and post-trip review.
+            </div>
+            """, unsafe_allow_html=True)
+
+        else:
+            st.warning("No data under current filters.")
+
+    with sol_tab3:
+        st.markdown('<div class="solution-box">', unsafe_allow_html=True)
+        st.subheader("Step 3: Fare and Revenue Suitability")
+        st.write("This section checks OD routes using revenue per minute, fare per kilometer, duration, and risk.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        od = build_od_summary(f)
+
+        if len(od):
+            min_trips = st.slider("Minimum trips for route review", 1, 500, 10)
+            review = od[od["Trips"] >= min_trips].copy()
+
+            if len(review):
+                q_rev_min = review["Revenue_per_Minute"].quantile(0.25)
+                q_fare_km = review["Fare_per_Km"].quantile(0.25)
+                q_risk = review["High_Risk_Share"].quantile(0.75)
+
+                review["Recommended_Action"] = np.select(
+                    [
+                        (review["Revenue_per_Minute"] <= q_rev_min) & (review["High_Risk_Share"] >= q_risk),
+                        (review["Revenue_per_Minute"] <= q_rev_min),
+                        (review["Fare_per_Km"] <= q_fare_km),
+                        (review["High_Risk_Share"] >= q_risk),
+                        (review["Route_Pressure_Index"] >= review["Route_Pressure_Index"].quantile(0.75))
+                    ],
+                    [
+                        "Add incentive + risk control",
+                        "Review incentive or fare timing",
+                        "Review distance-based pricing",
+                        "Add monitoring and support logic",
+                        "Strategic route: monitor daily"
+                    ],
+                    default="Keep normal monitoring"
+                )
+
+                st.markdown('<div class="main-card">', unsafe_allow_html=True)
+                st.subheader("Route Cost-Coverage Review")
+                st.dataframe(
+                    review[[
+                        "Route", "Trips", "Revenue", "Avg_Duration", "Avg_Distance",
+                        "Revenue_per_Minute", "Fare_per_Km", "Duration_per_Km",
+                        "High_Risk_Share", "Route_Pressure_Index", "Recommended_Action"
+                    ]].round(3),
+                    use_container_width=True
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                action_summary = review["Recommended_Action"].value_counts().reset_index()
+                action_summary.columns = ["Action", "Count"]
+
+                fig = px.bar(
+                    action_summary,
+                    x="Action",
+                    y="Count",
+                    text="Count",
+                    color="Count",
+                    color_continuous_scale=["#FFD6EA", "#E6007E", "#8A004B"]
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                st.warning("No routes match the selected minimum trips.")
+
+        else:
+            st.warning("No OD route data under current filters.")
+
+    with sol_tab4:
+        st.markdown('<div class="solution-box">', unsafe_allow_html=True)
+        st.subheader("Step 4: Governorate Monitoring Through Streamlit")
+        st.write("This page monitors cities available in the Jeeny dataset.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        city_summary = build_city_summary(f)
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            st.markdown('<div class="main-card">', unsafe_allow_html=True)
+            st.subheader("City Control Table")
+            st.dataframe(city_summary.round(2), use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with c2:
+            st.markdown('<div class="main-card">', unsafe_allow_html=True)
+            st.subheader("City Pressure Chart")
+            fig = px.bar(
+                city_summary,
+                x="City",
+                y="Operational_Pressure_Index",
+                text="Operational_Pressure_Index",
+                color="Operational_Pressure_Index",
+                color_continuous_scale=["#FFD6EA", "#E6007E", "#8A004B"],
+                hover_data=["Trips", "Revenue", "High_Risk_Share"]
+            )
+            fig.update_traces(texttemplate="%{text:.1f}")
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    with sol_tab5:
+        st.markdown('<div class="solution-box">', unsafe_allow_html=True)
+        st.subheader("Step 5: Airport Peak-Hour Pilot")
+        st.write("Peak hours are calculated directly from Airport trips in the Jeeny dataset.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        airport = f[f["IsAirport"] == 1].copy()
+
+        if len(airport):
+            airport_hour = airport.groupby("TripHour", as_index=False).agg(
+                Trips=("Trip_ID", "count"),
+                Revenue=("Fare", "sum"),
+                Avg_Duration=("Trip_Duration_min", "mean"),
+                High_Risk_Share=("IsHighRisk", "mean"),
+                Revenue_per_Minute=("Revenue_per_Minute", "mean")
+            )
+
+            airport_hour["High_Risk_Share"] *= 100
+            airport_hour["Demand_Score"] = normalize(airport_hour["Trips"])
+            airport_hour["Revenue_Score"] = normalize(airport_hour["Revenue"])
+            airport_hour["Duration_Score"] = normalize(airport_hour["Avg_Duration"])
+            airport_hour["Risk_Score"] = normalize(airport_hour["High_Risk_Share"])
+
+            airport_hour["Peak_Pressure_Index"] = (
+                0.45 * airport_hour["Demand_Score"] +
+                0.20 * airport_hour["Revenue_Score"] +
+                0.20 * airport_hour["Duration_Score"] +
+                0.15 * airport_hour["Risk_Score"]
+            ) * 100
+
+            airport_hour = airport_hour.sort_values("Peak_Pressure_Index", ascending=False)
+            peak_hours = airport_hour.head(5)
+
+            c1, c2 = st.columns([1.2, 1])
+
+            with c1:
+                st.markdown('<div class="main-card">', unsafe_allow_html=True)
+                st.subheader("Airport Peak Pressure by Hour")
+                st.dataframe(airport_hour.round(2), use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            with c2:
+                st.markdown('<div class="main-card">', unsafe_allow_html=True)
+                st.subheader("Top Peak Hours")
+                fig = px.bar(
+                    peak_hours,
+                    x="TripHour",
+                    y="Peak_Pressure_Index",
+                    text="Peak_Pressure_Index",
+                    color="Peak_Pressure_Index",
+                    color_continuous_scale=["#FFD6EA", "#E6007E", "#8A004B"],
+                    hover_data=["Trips", "Revenue", "High_Risk_Share"]
+                )
+                fig.update_traces(texttemplate="%{text:.1f}")
+                st.plotly_chart(fig, use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            recommended_hours = ", ".join([str(int(x)) + ":00" for x in peak_hours["TripHour"].tolist()])
+
+            st.markdown(f"""
+            <div class="success-box">
+            <b>Data-driven pilot recommendation:</b><br>
+            Start driver pre-positioning 30–45 minutes before these Airport peak hours:
+            <b>{recommended_hours}</b>.
+            </div>
+            """, unsafe_allow_html=True)
+
+        else:
+            st.warning("No Airport data under current filters.")
+
+# ============================================================
+# Download
+# ============================================================
+
+st.markdown("---")
+
+st.download_button(
+    "Download Filtered Jeeny Data",
+    f.to_csv(index=False).encode("utf-8"),
+    "jeeny_filtered_dashboard_data.csv",
+    "text/csv"
+)
+
+st.caption(f"Data source: {DATA_PATH}")
+'''
+
+app_code = app_code.replace("__DATA_PATH__", DATA_PATH.replace("\\", "/"))
+app_code = app_code.replace("__MAP_PATH__", MAP_PATH.replace("\\", "/"))
+app_code = app_code.replace("__LOGO_PATH__", LOGO_PATH.replace("\\", "/"))
+
+with open(APP_PATH, "w", encoding="utf-8") as f:
+    f.write(app_code)
+
+print("✅ Dashboard app created:", APP_PATH)
+
+# ============================================================
+# 5) Run Streamlit
+# ============================================================
+
+subprocess.run(["pkill", "-f", "streamlit"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+st_log_path = "/content/streamlit_log.txt"
+st_log = open(st_log_path, "w", encoding="utf-8")
+
+st_proc = subprocess.Popen(
+    [
+        "streamlit", "run", APP_PATH,
+        "--server.port=8501",
+        "--server.address=0.0.0.0",
+        "--server.headless=true",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false"
+    ],
+    stdout=st_log,
+    stderr=st_log,
+    text=True
+)
+
+time.sleep(6)
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+result = sock.connect_ex(("127.0.0.1", 8501))
+sock.close()
+
+if result != 0:
+    print("❌ Streamlit failed. Error log:")
+    print(open(st_log_path, "r", encoding="utf-8", errors="ignore").read())
+    raise SystemExit
+
+print("✅ Streamlit is running on port 8501")
+print("✅ Opening Jeeny dashboard directly in Colab...")
+
+output.serve_kernel_port_as_window(8501)
